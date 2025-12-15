@@ -106,6 +106,17 @@ atoi(const char *s)
   return n;
 }
 
+// 判断是不是数字
+int
+ck_strint(const char *s){
+    while(*s) {
+        if(! ('0' <= *s && *s <= '9') )
+            return 0;
+        s++;
+    }
+    return 1;
+}
+
 void*
 memmove(void *vdst, const void *vsrc, int n)
 {

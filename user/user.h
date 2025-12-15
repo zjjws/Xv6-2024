@@ -33,6 +33,7 @@ void fprintf(int, const char*, ...) __attribute__ ((format (printf, 2, 3)));
 void printf(const char*, ...) __attribute__ ((format (printf, 1, 2)));
 char* gets(char*, int max);
 uint strlen(const char*);
+int ck_strint(const char *s);
 void* memset(void*, int, uint);
 int atoi(const char*);
 int memcmp(const void *, const void *, uint);

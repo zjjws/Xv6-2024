@@ -27,7 +27,7 @@ void
 ls(char *path)
 {
   char buf[512], *p;
-  int fd;
+  int fd;//file descriptor
   struct dirent de;
   struct stat st;
 
@@ -76,11 +76,12 @@ int
 main(int argc, char *argv[])
 {
   int i;
-
+  //只有 ls 后续无参数
   if(argc < 2){
     ls(".");
     exit(0);
   }
+  //依次调用
   for(i=1; i<argc; i++)
     ls(argv[i]);
   exit(0);
