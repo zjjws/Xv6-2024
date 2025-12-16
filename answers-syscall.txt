@@ -1,0 +1,11 @@
+1. "usertrap" called the "syscall"
+2. p->trapframe->a7 value 是 7，代表 exec 系统调用的系统调用号
+3. p /x $sstatus 输出 0x200000022，第八位 SPP=0,所以之前是用户模式
+4. 内核 panic 在：
+ num = * (int *) 0;
+80001c82:	00002683          	lw	a3,0(zero) # 0 <_entry-0x80000000>
+当时 num 对应的是寄存器 a3
+5.因为在内核态解引用了空指针，lw	a3,0(zero) 中 0(zero) 是地址 0
+从Xv6虚拟空间布局来看，地址 0 在内核地址空间里是“不映射”的
+这个和之前 scause=0xd 是相互印证的。
+6.进程名：initcode 进程 id 为 1

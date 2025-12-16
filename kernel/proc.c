@@ -124,6 +124,7 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  p->tracemask=0;//!!! 一定要清空！！！ 不然会出现一次 trace 之后后面新进程也一直在追踪的情况！！！
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -295,7 +296,7 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
-
+  np->tracemask=p->tracemask;//子进程需要继承父进程的mask信息，不然最后一个测试点通过不了
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
 
