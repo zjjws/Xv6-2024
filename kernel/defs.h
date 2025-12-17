@@ -67,6 +67,10 @@ void            ramdiskrw(struct buf*);
 void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
+//声明在这里才能给内核其他地方使用
+void* superalloc(void);
+void  superfree(void*);
+
 
 // log.c
 void            initlog(int, struct superblock*);

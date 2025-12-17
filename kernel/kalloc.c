@@ -11,6 +11,7 @@
 
 void freerange(void *pa_start, void *pa_end);
 
+
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
 
@@ -21,13 +22,34 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
-} kmem;
+}kmem;
 
+//仿照 kmem 建立
+//SUPERPGSIZE 和 SUPERPGROUNDUP 都已经在 riscv.h 中 define 了。
+struct superrun {
+  struct superrun *next;
+};
+struct {
+  struct spinlock lock;
+  struct superrun *freelist;
+} superkmem;
+
+//分配的 2MB 连续区间个数
+#define superkmem_NUM 32
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
-  freerange(end, (void*)PHYSTOP);
+  initlock(&superkmem.lock, "superkmem");uint64 start = PGROUNDUP((uint64)end);
+  uint64 super_start = SUPERPGROUNDUP(start);
+  uint64 super_end   = super_start + superkmem_NUM * SUPERPGSIZE;
+  if(super_end > PHYSTOP)
+    panic("not enough mem for superpages");
+  for(uint64 p = super_start; p + SUPERPGSIZE <= super_end; p += SUPERPGSIZE){
+    superfree((void*)p);
+  }
+  freerange((void*)start, (void*)super_start);
+  freerange((void*)super_end, (void*)PHYSTOP);
 }
 
 void
@@ -61,6 +83,23 @@ kfree(void *pa)
   kmem.freelist = r;
   release(&kmem.lock);
 }
+void
+superfree(void *pa)
+{
+  struct superrun *r;
+  if(((uint64)pa % SUPERPGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+    panic("superkfree");
+
+  memset(pa, 1, SUPERPGSIZE);
+
+  r = (struct superrun*)pa;
+
+  acquire(&superkmem.lock);
+  r->next = superkmem.freelist;
+  superkmem.freelist = r;
+  release(&superkmem.lock);
+}
+
 
 // Allocate one 4096-byte page of physical memory.
 // Returns a pointer that the kernel can use.
@@ -80,3 +119,19 @@ kalloc(void)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
 }
+void*
+superalloc(void)
+{
+  struct superrun *r;
+
+  acquire(&superkmem.lock);
+  r = superkmem.freelist;
+  if(r)
+    superkmem.freelist = r->next;
+  release(&superkmem.lock);
+
+  if(r)
+    memset((void*)r, 5, SUPERPGSIZE);
+  return (void*)r;
+}
+
