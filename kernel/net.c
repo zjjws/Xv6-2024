@@ -18,11 +18,59 @@ static uint32 local_ip = MAKE_IP_ADDR(10, 0, 2, 15);
 static uint8 host_mac[ETHADDR_LEN] = { 0x52, 0x55, 0x0a, 0x00, 0x02, 0x02 };
 
 static struct spinlock netlock;
+//UDP端口最多缓存数
+#define UDPMAX 16
+//最多同时支持多少个被 bind 的 UDP 端口
+#define PORTSMAX 1024
+
+struct udpqent {
+  char *adr;//包起始地址
+  int length;
+  uint32 src_ip;//源ip
+  uint16 src_port;//源端口
+};
+struct udpport {
+  int used;
+  uint16 port;
+  struct udpqent q[UDPMAX];
+  int head,tail,count;
+};
+
+static struct udpport ports[PORTSMAX];
+
+static struct udpport*
+port_lookup(uint16 port)
+{
+  for(int i = 0; i < PORTSMAX; i++){
+    if(ports[i].used && ports[i].port == port)
+      return &ports[i];
+  }
+  return 0;
+}
+
+static struct udpport*
+port_bind(uint16 port)
+{
+  struct udpport *p = port_lookup(port);
+  if(p) return p;
+
+  for(int i = 0; i < PORTSMAX; i++){
+    if(ports[i].used == 0){
+      ports[i].used = 1;
+      ports[i].port = port;
+      ports[i].head = ports[i].tail = ports[i].count = 0;
+      return &ports[i];
+    }
+  }
+  return 0;
+}
 
 void
 netinit(void)
 {
   initlock(&netlock, "netlock");
+  for(int i = 0; i < PORTSMAX; i++)
+    ports[i].used = 0;
 }
 
 
@@ -37,8 +85,20 @@ sys_bind(void)
   //
   // Your code here.
   //
+  int port_i;
+  argint(0, &port_i);
 
-  return -1;
+  if(port_i < 0 || port_i > 65535)
+    return -1;
+
+  uint16 port = (uint16)port_i;
+
+  acquire(&netlock);
+  struct udpport *p = port_bind(port);
+  release(&netlock);
+  if(p == 0)
+    return -1;  // 没空槽
+  return 0;
 }
 
 //
@@ -77,7 +137,69 @@ sys_recv(void)
   //
   // Your code here.
   //
-  return -1;
+  int dport_i;
+  uint64 src_u, sport_u, buf_u;
+  int maxlen;
+
+  argint(0, &dport_i);
+  argaddr(1, &src_u);
+  argaddr(2, &sport_u);
+  argaddr(3, &buf_u);
+  argint(4, &maxlen);
+
+  if(dport_i < 0 || dport_i > 65535)
+    return -1;
+  if(maxlen < 0)
+    return -1;
+
+  uint16 dport = (uint16)dport_i;
+  struct proc *pr = myproc();
+
+  struct udpqent ent;
+
+  acquire(&netlock);
+  struct udpport *p = port_lookup(dport);
+  if(p == 0){
+    release(&netlock);
+    return -1; // 没 bind
+  }
+
+  while(p->count == 0){
+    if(killed(pr)){
+      release(&netlock);
+      return -1;
+    }
+    sleep(p, &netlock);
+  }
+
+  ent = p->q[p->head];
+  p->head = (p->head + 1) % UDPMAX;
+  p->count--;
+
+  release(&netlock);
+
+  int ncopy = ent.length;
+  if(ncopy > maxlen) ncopy = maxlen;
+
+  char *payload = ent.adr + sizeof(struct eth) + sizeof(struct ip) + sizeof(struct udp);
+
+  if(copyout(pr->pagetable, src_u, (char*)&ent.src_ip, sizeof(ent.src_ip)) < 0){
+    kfree(ent.adr);
+    return -1;
+  }
+  if(copyout(pr->pagetable, sport_u, (char*)&ent.src_port, sizeof(ent.src_port)) < 0){
+    kfree(ent.adr);
+    return -1;
+  }
+  if(ncopy > 0){
+    if(copyout(pr->pagetable, buf_u, payload, ncopy) < 0){
+      kfree(ent.adr);
+      return -1;
+    }
+  }
+
+  kfree(ent.adr);
+  return ncopy;
 }
 
 // This code is lifted from FreeBSD's ping.c, and is copyright by the Regents
@@ -191,7 +313,70 @@ ip_rx(char *buf, int len)
   //
   // Your code here.
   //
-  
+   int need = sizeof(struct eth) + sizeof(struct ip) + sizeof(struct udp);
+  if(len < need){
+    kfree(buf);
+    return;
+  }
+
+  struct eth *eth = (struct eth *)buf;
+  struct ip  *ip  = (struct ip *)(eth + 1);
+
+  if(ip->ip_p != IPPROTO_UDP){
+    kfree(buf);
+    return;
+  }
+
+  struct udp *udp = (struct udp *)(ip + 1);
+
+  uint16 dport = ntohs(udp->dport);
+  uint16 sport = ntohs(udp->sport);
+  uint16 ulen  = ntohs(udp->ulen);
+
+  if(ulen < sizeof(struct udp)){
+    kfree(buf);
+    return;
+  }
+
+  int length = ulen - sizeof(struct udp);
+
+  // 粗略确认包里确实包含这么多payload
+  int have = len - (sizeof(struct eth) + sizeof(struct ip) + sizeof(struct udp));
+  if(length > have){
+    kfree(buf);
+    return;
+  }
+
+  uint32 src_ip = ntohl(ip->ip_src);
+
+  acquire(&netlock);
+
+  struct udpport *p = port_lookup(dport);
+  if(p == 0){
+    release(&netlock);
+    kfree(buf);      // 未 bind：丢弃
+    return;
+  }
+
+  if(p->count >= UDPMAX){
+    release(&netlock);
+    kfree(buf);      // 本端口队列满：丢弃
+    return;
+  }
+
+  struct udpqent *e = &p->q[p->tail];
+  e->adr = buf;
+  e->length = length;
+  e->src_ip = src_ip;
+  e->src_port = sport;
+
+  p->tail = (p->tail + 1) % UDPMAX;
+  p->count++;
+
+  wakeup(p);         // 唤醒等待 recv 的进程
+  release(&netlock);
+
+  return;            // buf 所有权交给队列，不能 kfree
 }
 
 //

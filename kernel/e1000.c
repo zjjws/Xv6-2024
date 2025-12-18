@@ -101,8 +101,23 @@ e1000_transmit(char *buf, int len)
   // the TX descriptor ring so that the e1000 sends it. Stash
   // a pointer so that it can be freed after send completes.
   //
-
-  
+  acquire(&e1000_lock);
+  uint32 idx = regs[E1000_TDT];
+  if((tx_ring[idx].status & E1000_TXD_STAT_DD) == 0){
+    release(&e1000_lock);
+    return -1;
+  }
+  if(tx_bufs[idx]){
+    kfree(tx_bufs[idx]);
+    tx_bufs[idx] = 0;
+  }
+  tx_ring[idx].addr = (uint64)buf;
+  tx_ring[idx].length = len;
+  tx_ring[idx].cmd = E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS;
+  tx_ring[idx].status = 0;
+  tx_bufs[idx] = buf;   // 记住：未来要 kfree
+  regs[E1000_TDT] = (idx + 1) % TX_RING_SIZE;
+  release(&e1000_lock);
   return 0;
 }
 
@@ -115,7 +130,31 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver a buf for each packet (using net_rx()).
   //
+  while(1){
+    char *buf,*buff;
+    int len;
 
+    acquire(&e1000_lock);
+    uint32 idx = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+    //没有新的信息了
+    if((rx_ring[idx].status & E1000_RXD_STAT_DD) == 0){
+      release(&e1000_lock);
+      break;
+    }
+
+    //取包
+    buf=(char*)rx_ring[idx].addr;
+    len=rx_ring[idx].length;
+    if((buff=(char*)kalloc())==0)panic("e1000_recv:kalloc");
+
+    rx_ring[idx].addr = (uint64)buff;
+    rx_ring[idx].status = 0;
+    regs[E1000_RDT] = idx;
+    
+    //先把锁释放再调用别的函数，不然可能会竞争
+    release(&e1000_lock);
+    net_rx(buf, len);
+  }
 }
 
 void
