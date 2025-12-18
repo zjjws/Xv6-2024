@@ -51,6 +51,7 @@ sys_sbrk(void)
 uint64
 sys_sleep(void)
 {
+  backtrace();
   int n;
   uint ticks0;
 
@@ -90,4 +91,41 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+
+uint64
+sys_sigalarm(void)
+{
+  int ticks;//用户传入 tick
+  uint64 handler;//用户传入的处理函数地址
+  struct proc *p = myproc();
+
+  argint(0, &ticks);
+  argaddr(1, &handler);
+
+//   if(ticks == 0 && handler == 0){
+  if(ticks==0||handler==0){//只要任何一个=0就应该认为是不需要 alarm 的。
+    p->alarmticks = 0;
+    p->alarmhandler = 0;
+    p->alarm_elapsed = 0;
+    p->alarm_inflight = 0;
+    return 0;
+  }
+
+  p->alarmticks = ticks;
+  p->alarmhandler = handler;
+  p->alarm_elapsed = 0;//重计时
+  p->alarm_inflight = 0;//标记要清零
+  return 0;
+}
+
+
+uint64
+sys_sigreturn(void)
+{
+  struct proc *p = myproc();
+  memmove(p->trapframe, &p->alarm_tf_backup, sizeof(struct trapframe));
+  p->alarm_inflight = 0;
+  return p->trapframe->a0;
 }
