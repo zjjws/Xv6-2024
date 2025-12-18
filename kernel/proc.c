@@ -322,6 +322,7 @@ fork(void)
   np->state = RUNNABLE;
   release(&np->lock);
 
+  sfence_vma();
   return pid;
 }
 

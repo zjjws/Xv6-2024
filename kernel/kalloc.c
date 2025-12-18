@@ -9,6 +9,32 @@
 #include "riscv.h"
 #include "defs.h"
 
+
+//记录每个页的引用次数
+int kcnt[PHYSTOP/PGSIZE];
+struct spinlock kcntlock;
+
+//直接计算页标号
+#define pa_index(pa) (pa/PGSIZE)
+void
+kcntadd(uint64 pa)
+{
+  acquire(&kcntlock);
+  kcnt[pa_index(pa)]++;
+  release(&kcntlock);
+}
+int
+kcntsub(uint64 pa)
+{
+  int r;
+  acquire(&kcntlock);
+  kcnt[pa_index(pa)]--;
+  r=kcnt[pa_index(pa)];
+  release(&kcntlock);
+  return r;
+}
+
+
 void freerange(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
@@ -27,6 +53,7 @@ void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&kcntlock, "kcnt");
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -51,6 +78,8 @@ kfree(void *pa)
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
+  if(kcntsub((uint64)pa)>0)return;//不需要释放
+
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
 
@@ -69,14 +98,23 @@ void *
 kalloc(void)
 {
   struct run *r;
+  
 
   acquire(&kmem.lock);
   r = kmem.freelist;
   if(r)
     kmem.freelist = r->next;
   release(&kmem.lock);
-
-  if(r)
+  
+  if(r){
     memset((char*)r, 5, PGSIZE); // fill with junk
+    void* pa=(void *)r;
+    //初始化计数
+    acquire(&kcntlock);
+    kcnt[pa_index((uint64)pa)]=1;
+    release(&kcntlock);
+  }
+    
   return (void*)r;
 }
+

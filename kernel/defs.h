@@ -64,6 +64,10 @@ void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
 
+void  kcntadd(uint64);
+int kcntsub(uint64);
+int cowalloc(pagetable_t pagetable, uint64 va);
+
 // log.c
 void            initlog(int, struct superblock*);
 void            log_write(struct buf*);
