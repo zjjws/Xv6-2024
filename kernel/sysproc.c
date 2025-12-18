@@ -124,6 +124,8 @@ sys_sigalarm(void)
 uint64
 sys_sigreturn(void)
 {
+//报警处理函数运行在用户态，其执行结束后必须显式调用 sigreturn。内核在处理该系统调用时，会恢复此前保存的陷阱帧，从而完整恢复被中断时的用户态寄存器状态，并允许后续报警再次触发。
+//通过这种方式，进程在感知报警的同时，其正常执行流程不受破坏。
   struct proc *p = myproc();
   memmove(p->trapframe, &p->alarm_tf_backup, sizeof(struct trapframe));
   p->alarm_inflight = 0;
